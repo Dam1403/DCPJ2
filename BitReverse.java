@@ -17,11 +17,6 @@ public class BitReverse{
                    119,247,15,143,79,207,47,175,111,239,31,159,95,223,63,191,127,
                    255};
 
-  public static void main( String args[] ){
-    reverse(1);
-  }
-
-
   public static int reverse (int b32){
     //Left to right
     int oct1 = map[(b32 & 0xFF)];
@@ -32,21 +27,13 @@ public class BitReverse{
 
 
     return (oct1 << 24)|
-               (oct2 << 16)|
-              (oct3 << 8)|
-              (oct4);
+           (oct2 << 16)|
+           (oct3 << 8)|
+           (oct4);
   }
 
-  public static byte[] reverse(byte[] b){
-    byte[] ret = {
-        map[(int)b[3] && 0xFF],
-        map[(int)b[2] && 0xFF],
-        map[(int)b[1] && 0xFF],
-        map[(int)b[0] && 0xFF],
-      }
-
-    return ret
+  public static byte reverseByte(byte b){
+    return (byte)map[(b & 0xFF)];
   }
-
 
 }
