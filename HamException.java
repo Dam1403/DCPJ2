@@ -1,6 +1,6 @@
-public class HamException extends HamException{
+public class HamException extends Exception{
 
   public HamException(String message){
-     super.message();
+     super(message);
   }
 }

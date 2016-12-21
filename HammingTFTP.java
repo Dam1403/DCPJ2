@@ -4,6 +4,8 @@ import java.io.RandomAccessFile;
 import java.io.IOException;
 import java.io.FileNotFoundException;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.util.Arrays;
 
 public class HammingTFTP{
   private static String usage = "java HammingTFTP  [ error | noerror ]  tftphost  file";
@@ -19,9 +21,6 @@ public class HammingTFTP{
   private static final int ERROR = 5;
   private static final int NACK = 6;
 
-
-
-  final protected static char[] hexArray = "0123456789ABCDEF".toCharArray();
 
 
   private static boolean error = false;
@@ -53,53 +52,70 @@ public class HammingTFTP{
         return;
       }
 
-
-
-      if(!error){
-
-        try{
+      try{
+        if(!error){
           hng.requestParOnly(args[2]);
-          int buffSize = hng.receive(recBuff , recBuffSize);
+        }
+        else{ hng.requestParErr(args[2]); }
 
-          int block = 0;
-          int blockNum = 0;
-          boolean end = false;
+        int buffSize = hng.receive(recBuff , recBuffSize);
 
-          FileOutputStream fileout = new FileOutputStream(args[2]);
+        int block = 0;
+        int blockNum = 0;
+        boolean end = false;
 
-          while(!end){
-            if(buffSize != 516){
-              end = true;
+        FileOutputStream fileout = new FileOutputStream(args[2]);
+
+        while(!end){
+          if(buffSize != 516){
+            end = true;
+          }
+          blockNum = ((recBuff[2]& 0xFF) << 8 |
+                    recBuff[3]& 0xFF);
+          for(int i = 4; i < buffSize; i += 4){
+
+            block = ((int)(recBuff[i+3] << 24) & 0xFF000000)|
+                    ((int)(recBuff[i+2] << 16) & 0xFF0000)|
+                    ((int)(recBuff[i+1] << 8) & 0xFF00)|
+                    ((int)(recBuff[i]) & 0xFF);
+            //println("REVBLOCK " + block);
+            if(error){
+              try{ block = parseDataErrBlock(block); }
+              catch(HamException e){
+                  println("HamException");
+                  i = 4;
+                  hng.nack(blockNum);
+                  buffSize = hng.receive(recBuff,recBuffSize);
+
+              }
             }
-            blockNum = recBuff[3];
-            for(int i = 4; i < buffSize; i += 4){
-
-              block = ((int)(recBuff[i+3] << 24) & 0xFF000000)|
-                      ((int)(recBuff[i+2] << 16) & 0xFF0000)|
-                      ((int)(recBuff[i+1] << 8) & 0xFF00)|
-                      ((int)(recBuff[i]) & 0xFF);
-              println("REVBLOCK " + block);
+            else{
               block = parseDataBlock(block);
-
-              HammingWriterGuy.HamWrite(block,fileout);
-            }
-            if(!end){
-              hng.ack(blockNum);
-              buffSize = hng.receive(recBuff , recBuffSize);
             }
 
-          }
-          fileout.close();
-          int overflow = (buffSize - 4) % 4;
-          if(overflow != 0){
-            trimFile(args[2] , overflow);
-          }
-        }
-        catch(Exception e){
-          e.printStackTrace();
-          return;
-        }
 
+            HammingWriterGuy.HamWrite(block,fileout);
+          }
+          if(!end){
+            hng.ack(blockNum);
+            //println("BlockNo " + blockNum);
+            buffSize = hng.receive(recBuff , recBuffSize);
+          }
+
+        }
+        fileout.close();
+        int overflow = (buffSize - 4) % 4;
+        if(overflow != 0){
+          trimFile(args[2] , overflow);
+        }
+      }
+      catch(SocketTimeoutException e){
+        println("Timeout");
+        return;
+      }
+      catch(Exception e){
+        e.printStackTrace();
+        return;
       }
 
   }
@@ -130,10 +146,10 @@ public class HammingTFTP{
 
 
   private static int parseDataBlock(int block){
-      println("Block " + block);
+      //println("Block " + block);
       int data = 0;
       int revblock = BitReverse.reverse(block);
-      println("RevBlock " + block);
+      //println("RevBlock " + block);
       for(int i = 0; i < 32; i++){
         switch(i){
           case 31:
@@ -155,21 +171,20 @@ public class HammingTFTP{
         revblock = revblock >>> 1;
       }
     data = data << 5;
-    println("DATA " + data);
+   //println("DATA " + data);
+    return data;
   }
-  return data;
+
 
   private static int parseDataErrBlock(int block) throws Exception{
-      println("Block " + block);
+     //println("BlockparseError " + block);
       int[] ps = {1,1,1,1,1,1};
-      int p1 = block & 0xAAAAAAAA;
-      int p2 = block & 0x33333333;
-      int p4 = block & 0x0F0F0F0F;
-      int p8 = block & 0x00FF00FF;
-      int p16 = block & 0x0000FFFF;
-      int pall = block;
-
-
+      int p1 = block & 0x55555555;//These in binary are masks for the different
+      int p2 = block & 0x66666666;//parity checks
+      int p4 = block & 0x78787878;
+      int p8 = block & 0x7F807F80;
+      int p16 = block & 0x7FFF8000;
+      int pall = block & 0x7FFFFFFF;
 
       for(int i = 0; i < 32;i++){
         ps[0] = ps[0] ^ (p1 & 1);
@@ -187,23 +202,42 @@ public class HammingTFTP{
         pall = pall >>> 1;
       }
 
-
-      if(ps[5] != (block >>> 31)){
-        throw new Exception();
-        return;
-      }
+      boolean isProblem = false;
       int problemBit = 0;
-      for(int i = 0; i < ps.length; i++){
+      for(int i = ps.length - 2; i >= 0; i--){
+        problemBit = problemBit << 1;
+        //println("" +problemBit);
         if(ps[i] == 0){
+            ////println("ERROR DETECTED");
+            ////println("" + ps[i]);
+            isProblem = true;
+            problemBit += 1;
+        }
 
+
+      }
+
+
+      if(isProblem){
+        //Fix the problem bit
+        int mask = 1 << (problemBit - 1);
+        block = mask ^ block;
+        pall = block & 0x7FFFFFFF;
+        ////println("BLOCK: " + block);
+
+        //Does The global parity still validate???
+        ps[5] = 1;
+        for(int i = 0; i < 32; i++){
+          ps[5] = ps[5] ^ (pall & 1);
+          pall = pall >>> 1;
+        }
+        //if not throw hamexception
+        if(ps[5] != (block >>> 31)){
+          throw new HamException("GLobal Parity Error ");
         }
       }
+      return parseDataBlock(block);
 
-
-      int data = 0;
-
-
-    return data;
   }
   private int checkParity(int block){
     int parity = 1;
@@ -217,22 +251,5 @@ public class HammingTFTP{
     System.out.println(line);
   }
   //DELETE
-
-  public static String bytesToHex(byte[] bytes,int size) {
-    char[] hexChars = new char[size * 2];
-    for ( int j = 0; j < size; j++ ) {
-        int v = bytes[j] & 0xFF;
-        hexChars[j * 2] = hexArray[v >>> 4];
-        hexChars[j * 2 + 1] = hexArray[v & 0x0F];
-    }
-    return new String(hexChars);
-}
-
-
-
-
-
-
-
 
 }
